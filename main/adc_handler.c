@@ -4,6 +4,7 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_err.h"
+#include <math.h>
 
 // Manejadores del ADC (API oneshot - patrón del ejemplo oficial)
 static adc_oneshot_unit_handle_t adc_handle = NULL;
@@ -72,8 +73,16 @@ int adc_temp_read_raw(void)
 
 /**
  * adc_temp_read_celsius()
- * Lee la temperatura desde el sensor LM35 y la convierte a °C.
- * LM35: 10 mV = 1°C.
+ * Lee la temperatura desde un NTC 10k (B=3950) con divisor de voltaje.
+ *
+ * Circuito: 3.3V ─── NTC ─── ADC_GPIO4 ─── 10kΩ ─── GND
+ *
+ * Fórmulas:
+ *   R_ntc = R_fijo * (Vsupply / Vadc - 1)
+ *   1/T = 1/T0 + (1/B) * ln(R_ntc / R0)  (Ecuación Beta)
+ *
+ * Donde:
+ *   T0 = 298.15K (25°C), R0 = 10kΩ, B = 3950
  */
 float adc_temp_read_celsius(void)
 {
@@ -82,7 +91,7 @@ float adc_temp_read_celsius(void)
 
     // Leer valor crudo del ADC
     esp_err_t ret = adc_oneshot_read(adc_handle, ADC_TEMP_CHANNEL, &raw_value);
-    if (ret != ESP_OK) return 0.0f;
+    if (ret != ESP_OK) return 25.0f;
 
     // Convertir a voltaje usando calibración (si disponible)
     if (cali_handle != NULL)
@@ -90,11 +99,27 @@ float adc_temp_read_celsius(void)
         ret = adc_cali_raw_to_voltage(cali_handle, raw_value, &voltaje_mv);
     }
 
-    // Si no hay calibración o falló, estimar: V = (raw / 4095) * 3300 mV
+    // Fallback: estimar voltaje si no hay calibración
     if (ret != ESP_OK || cali_handle == NULL)
     {
         voltaje_mv = (raw_value * 3300) / 4095;
     }
 
-    return (float)voltaje_mv / 10.0f;
+    // ---- Convertir voltaje NTC a temperatura usando ecuación Beta ----
+    const float VCC_MV = 3300.0f;       // Voltaje de alimentación (3.3V)
+    const float R_FIJO = 10000.0f;      // Resistencia fija del divisor (10kΩ)
+    const float R0     = 10000.0f;      // Resistencia del NTC a 25°C (10kΩ)
+    const float B      = 3950.0f;       // Coeficiente Beta del NTC
+    const float T0     = 298.15f;       // 25°C en Kelvin
+
+    // Calcular resistencia del NTC a partir del voltaje en el divisor
+    // Circuito: NTC arriba, R_fijo abajo, ADC en el nodo medio
+    if (voltaje_mv <= 0 || voltaje_mv >= VCC_MV) return 25.0f;
+    float r_ntc = R_FIJO * (VCC_MV / (float)voltaje_mv - 1.0f);
+
+    // Ecuación Beta: 1/T = 1/T0 + (1/B) * ln(R/R0)
+    float inv_t = 1.0f / T0 + (1.0f / B) * logf(r_ntc / R0);
+    float temp_k = 1.0f / inv_t;
+
+    return temp_k - 273.15f;
 }

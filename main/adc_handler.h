@@ -23,7 +23,7 @@ void adc_temp_init(void);
 int adc_temp_read_raw(void);
 
 // Lee y convierte la temperatura a grados Celsius
-// Asume sensor LM35: 10 mV por °C
+// Circuito: NTC 10k (B=3950) + resistor 10kΩ en divisor de voltaje
 float adc_temp_read_celsius(void);
 
 #endif // ADC_HANDLER_H

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang='es'>
+<head>
+<meta charset='UTF-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1.0'>
+<title>STR 2026 - Control Ambiental</title>
+<link rel='stylesheet' href='style.css'>
+</head>
+<body>
+<div class='header'><h1>STR 2026</h1><p>Sistema de Control Ambiental Automatizado</p></div>
+<div class='container'>
+<div class='card' id='temp-section'>
+<h2><span class='icon'>🌡️</span> Temperatura & Ventilación</h2>
+<div class='temp-display'>
+<span class='temp-value' id='temp-value'>--</span><span class='temp-unit'>°C</span>
+<div class='temp-label'>Temperatura Ambiente</div>
+<div class='temp-status' id='temp-status'>Monitoreando...</div>
+</div>
+<div class='mode-toggle' id='fan-mode-toggle'>
+<button id='fan-auto' class='active' onclick='setFanMode(true)'>Automático</button>
+<button id='fan-manual' onclick='setFanMode(false)'>Manual</button>
+</div>
+<div id='fan-auto-controls'>
+<div class='control-row'><label>Temperatura Deseada</label><input type='number' id='temp-deseada' value='25' min='0' max='50' step='0.5'></div>
+<div class='control-row'><label>Temperatura Máxima</label><input type='number' id='temp-maxima' value='35' min='0' max='60' step='0.5'></div>
+<button class='btn btn-primary btn-block' onclick='saveTempConfig()'>Guardar Configuración</button>
+</div>
+<div id='fan-manual-controls' style='display:none'>
+<div class='control-row'><label>Velocidad Ventilador</label><input type='range' id='fan-speed' min='0' max='100' value='50' oninput='updateFanSpeedLabel()'><span id='fan-speed-label'>50%</span></div>
+<button class='btn btn-primary btn-block' onclick='setFanSpeed()'>Aplicar Velocidad</button>
+</div>
+<div class='status-msg'>Ventilador: <span id='fan-status'>0%</span></div>
+</div>
+<div class='card' id='curtain-section'>
+<h2><span class='icon'>🪟</span> Control de Cortinas</h2>
+<div class='mode-toggle' id='curtain-mode-toggle'>
+<button id='curtain-auto' class='active' onclick='setCurtainMode(true)'>Programado</button>
+<button id='curtain-manual' onclick='setCurtainMode(false)'>Manual</button>
+</div>
+<div id='curtain-manual-controls'>
+<div class='control-row'><label>Apertura</label><input type='range' id='curtain-pos' min='0' max='100' value='50' oninput='updateCurtainLabel()'><span id='curtain-pos-label'>50%</span></div>
+<button class='btn btn-primary btn-block' onclick='setCurtainPosition()'>Aplicar Posición</button>
+</div>
+<div id='curtain-auto-controls'>
+<p style='color:#aab;font-size:13px;margin-bottom:10px;'>Horarios Programados (máx. 8)</p>
+<table class='schedule-table'><thead><tr><th>Hora</th><th>Min</th><th>Apertura %</th><th>Activo</th><th></th></tr></thead><tbody id='schedule-rows'></tbody></table>
+<button class='btn btn-success btn-small' onclick='addScheduleRow()'>+ Agregar Horario</button>
+<button class='btn btn-primary btn-block' onclick='saveSchedules()'>Guardar Horarios</button>
+</div>
+<div class='status-msg'>Cortina: <span id='curtain-status'>50%</span></div>
+</div>
+<div class='card' id='rgb-section'>
+<h2><span class='icon'>💡</span> Iluminación LED RGB</h2>
+<div class='rgb-preview' id='rgb-preview'></div>
+<div class='color-picker-row'><label>Color</label><input type='color' id='rgb-color' value='#ffffff' onchange='previewRGB()'></div>
+<div class='control-row'><label>Brillo</label><input type='range' id='rgb-brillo' min='0' max='100' value='50' oninput='updateBrilloLabel();previewRGB()'><span id='rgb-brillo-label'>50%</span></div>
+<button class='btn btn-primary btn-block' onclick='applyRGB()'>Aplicar Color</button>
+</div>
+<div class='card' id='wifi-section'>
+<h2><span class='icon'>📶</span> Configuración de Red</h2>
+<div class='wifi-status'><div><span class='label'>IP Station:</span> <span class='value' id='wifi-ip'>0.0.0.0</span></div><div><span class='label'>Conectado:</span> <span class='value' id='wifi-connected'>No</span></div></div>
+<h3 style='color:#aab;font-size:14px;margin:10px 0;'>Red WiFi (Station)</h3>
+<div class='control-row'><label>SSID</label><input type='text' id='sta-ssid' placeholder='Nombre de la red'></div>
+<div class='control-row'><label>Contraseña</label><input type='password' id='sta-pass' placeholder='Contraseña'></div>
+<button class='btn btn-success btn-block' onclick='connectSTA()'>Conectar a WiFi</button>
+<h3 style='color:#aab;font-size:14px;margin:15px 0 10px;'>Punto de Acceso (AP)</h3>
+<div class='control-row'><label>SSID</label><input type='text' id='ap-ssid' placeholder='STR2026_Control'></div>
+<div class='control-row'><label>Contraseña</label><input type='password' id='ap-pass' placeholder='Mín. 8 caracteres'></div>
+<button class='btn btn-warning btn-block' onclick='configAP()'>Cambiar AP</button>
+</div>
+<div class='card' id='ota-section'>
+<h2><span class='icon'>🔄</span> Actualización OTA</h2>
+<p style='color:#aab;font-size:13px;margin-bottom:10px;'>Ingrese la URL del firmware .bin para actualizar el dispositivo de forma inalámbrica.</p>
+<div class='ota-row'><input type='url' id='ota-url' placeholder='http://ejemplo.com/firmware.bin'><button class='btn btn-warning' onclick='startOTA()'>Actualizar</button></div>
+<div class='status-msg'>Versión: <span id='ota-version'>---</span></div>
+</div>
+</div>
+<div class='toast' id='toast'></div>
+<script src='app.js'></script>
+</body>
+</html>
