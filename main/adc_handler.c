@@ -107,19 +107,28 @@ float adc_temp_read_celsius(void)
 
     // ---- Convertir voltaje NTC a temperatura usando ecuación Beta ----
     const float VCC_MV = 3300.0f;       // Voltaje de alimentación (3.3V)
-    const float R_FIJO = 10000.0f;      // Resistencia fija del divisor (10kΩ)
-    const float R0     = 10000.0f;      // Resistencia del NTC a 25°C (10kΩ)
+    const float R_FIJO = 5600.0f;      // Resistencia fija del divisor (5.6kΩ)
+    const float R0     = 5000.0f;      // Resistencia del NTC a 25°C (5kΩ)
     const float B      = 3950.0f;       // Coeficiente Beta del NTC
     const float T0     = 298.15f;       // 25°C en Kelvin
 
-    // Calcular resistencia del NTC a partir del voltaje en el divisor
-    // Circuito: NTC arriba, R_fijo abajo, ADC en el nodo medio
     if (voltaje_mv <= 0 || voltaje_mv >= VCC_MV) return 25.0f;
+
     float r_ntc = R_FIJO * (VCC_MV / (float)voltaje_mv - 1.0f);
+    if (r_ntc <= 0.0f) return 25.0f;
 
-    // Ecuación Beta: 1/T = 1/T0 + (1/B) * ln(R/R0)
-    float inv_t = 1.0f / T0 + (1.0f / B) * logf(r_ntc / R0);
+    float razon = r_ntc / R0;
+    float log_val = logf(razon);
+    if (!isfinite(log_val)) return 25.0f;
+
+    float inv_t = 1.0f / T0 + (1.0f / B) * log_val;
+    if (inv_t <= 0.0f) return 25.0f;
+
     float temp_k = 1.0f / inv_t;
+    float temp_c = temp_k - 273.15f;
 
-    return temp_k - 273.15f;
+    if (temp_c < -10.0f) return -10.0f;
+    if (temp_c > 125.0f) return 125.0f;
+
+    return temp_c;
 }

@@ -144,22 +144,27 @@ function updateData(){
     if(xhr.readyState==4&&xhr.status==200){
       var d=JSON.parse(xhr.responseText);
       document.getElementById('temp-value').textContent=d.temperatura.toFixed(1);
-      var statusEl=document.getElementById('temp-status');
-      var alarmEl=document.getElementById('temp-status');
+      if(document.activeElement!=document.getElementById('temp-deseada'))
+        document.getElementById('temp-deseada').value=d.temp_deseada;
+      if(document.activeElement!=document.getElementById('temp-maxima'))
+        document.getElementById('temp-maxima').value=d.temp_maxima;
+      var el=document.getElementById('temp-status');
       if(d.alarma){
-        statusEl.className='temp-status alarm';
-        statusEl.textContent='⚠ ALARMA: Temperatura excede el máximo!';
+        el.className='temp-status alarm';
+        el.textContent='⚠ ALARMA: Temperatura excede el máximo!';
       } else if(d.temperatura>d.temp_maxima-3){
-        statusEl.className='temp-status warn';
-        statusEl.textContent='⚠ Temperatura elevada';
+        el.className='temp-status warn';
+        el.textContent='⚠ Temperatura elevada';
       } else {
-        statusEl.className='temp-status ok';
-        statusEl.textContent='✅ Temperatura normal';
+        el.className='temp-status ok';
+        el.textContent='✅ Temperatura normal';
       }
-      document.getElementById('fan-status').textContent=d.fan_speed+'%';
+      var fanLabel=d.fan_auto_mode?'Auto: ':'';
+      document.getElementById('fan-status').textContent=fanLabel+d.fan_speed+'%';
       document.getElementById('curtain-status').textContent=d.curtain_pos+'%';
       document.getElementById('wifi-ip').textContent=d.wifi_ip;
       document.getElementById('wifi-connected').textContent=d.wifi_conectado?'Sí':'No';
+      document.getElementById('hora-actual').textContent=d.hora+(d.hora_sincronizada?' (NTP)':' (local)');
     }
   };
   xhr.send();

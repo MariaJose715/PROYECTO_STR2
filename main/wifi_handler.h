@@ -11,7 +11,7 @@
 // ============================================================
 
 // Configuración por defecto del AP (Access Point)
-#define AP_DEFAULT_SSID     "maria"
+#define AP_DEFAULT_SSID     "maria_esp"
 #define AP_DEFAULT_PASS     "12345678"
 #define AP_MAX_CONNECTIONS  4
 

@@ -7,6 +7,8 @@
 // PWM del VENTILADOR (alta frecuencia ~25 kHz)
 // ============================================================
 
+static uint8_t fan_speed_actual = 0;  // Velocidad actual del ventilador
+
 void pwm_fan_init(void)
 {
     // Configurar temporizador LEDC (patrón oficial ejemplo ledc_basic)
@@ -35,9 +37,15 @@ void pwm_fan_set_speed(uint8_t porcentaje)
 {
     if (porcentaje > 100) porcentaje = 100;
     uint32_t duty = (porcentaje * 255) / 100;
+    fan_speed_actual = porcentaje;
 
     ESP_ERROR_CHECK(ledc_set_duty(LEDC_LOW_SPEED_MODE, FAN_PWM_CHANNEL, duty));
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, FAN_PWM_CHANNEL));
+}
+
+uint8_t pwm_fan_get_speed(void)
+{
+    return fan_speed_actual;
 }
 
 // ============================================================

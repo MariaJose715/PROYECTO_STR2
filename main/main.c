@@ -37,6 +37,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+// LwIP SNTP para sincronización de hora
+#include "lwip/apps/sntp.h"
+
 // Módulos del proyecto
 #include "gpio_handler.h"     // Definición de pines GPIO
 #include "uart_handler.h"     // Depuración por serial
@@ -60,6 +63,7 @@
 // ================================================================
 
 static TaskHandle_t tarea_alarma_handle = NULL;  // Manejador de la tarea de alarma
+static bool hora_sincronizada = false;           // true cuando NTP responde
 
 // ================================================================
 // FUNCIONES AUXILIARES
@@ -175,33 +179,36 @@ static void verificar_horarios_cortina(void)
             scheds[i].hora == hora_actual &&
             scheds[i].minuto == min_actual)
         {
-            // Ejecutar la acción programada
             pwm_servo_set_position(scheds[i].apertura);
             web_set_curtain_position(scheds[i].apertura);
             uart_send_msg("[SISTEMA] Cortina programada: %d%% a las %02d:%02d",
                           scheds[i].apertura, scheds[i].hora, scheds[i].minuto);
         }
     }
+
+    // Mostrar hora cada ~30 segundos para depuración
+    static int dbg = 0;
+    if (++dbg % 15 == 0)
+    {
+        char buf[64];
+        struct tm ti;
+        localtime_r(&now, &ti);
+        strftime(buf, sizeof(buf), "%H:%M:%S", &ti);
+        uart_send_msg("[DBG] Hora sistema: %s | Cortinas: %d programadas", buf, count);
+    }
 }
 
 /**
- * inicializar_hora_sistema()
- * Configura la hora del sistema.
- * En un sistema real se sincronizaría con un servidor NTP.
- * Aquí usamos una hora simulada para propósitos de demostración.
+ * inicializar_hora_fallback()
+ * Configura una hora por defecto cuando NTP no está disponible.
  */
-static void inicializar_hora_sistema(void)
+static void inicializar_hora_fallback(void)
 {
-    // Configurar zona horaria (UTC-6 para Centroamérica, ajustar según sea necesario)
-    setenv("TZ", "CST-6", 1);
-    tzset();
-
-    // Configurar hora inicial (simulada - en producción usar NTP)
     struct tm tm_init = {
         .tm_year  = 2026 - 1900,
-        .tm_mon   = 5,        // Junio (0-indexed)
-        .tm_mday  = 9,
-        .tm_hour  = 12,
+        .tm_mon   = 5,
+        .tm_mday  = 10,
+        .tm_hour  = 8,
         .tm_min   = 0,
         .tm_sec   = 0,
     };
@@ -209,7 +216,65 @@ static void inicializar_hora_sistema(void)
     struct timeval now = { .tv_sec = t, .tv_usec = 0 };
     settimeofday(&now, NULL);
 
-    uart_send_msg("[SISTEMA] Hora del sistema inicializada");
+    char buf[64];
+    struct tm ti;
+    localtime_r(&t, &ti);
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &ti);
+    uart_send_msg("[SISTEMA] Hora FALLBACK (NTP no disponible): %s", buf);
+}
+
+/**
+ * sincronizar_hora_ntp()
+ * Intenta sincronizar la hora con servidores NTP.
+ * Espera hasta TIMEOUT_MS por una respuesta.
+ * Retorna true si se sincronizó correctamente.
+ */
+static bool sincronizar_hora_ntp(void)
+{
+    // Configurar zona horaria (UTC-6 para Centroamérica)
+    setenv("TZ", "CST-6", 1);
+    tzset();
+
+    uart_send_msg("[NTP] Iniciando sincronización...");
+
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_setservername(1, "time.google.com");
+    sntp_init();
+
+    // Esperar hasta que la hora sea válida (> 1-Jan-2025 00:00:00 UTC)
+    const time_t MIN_VALID = 1735689600;
+    const int TIMEOUT_MS = 15000;
+    int espera = 0;
+
+    while (espera < TIMEOUT_MS)
+    {
+        time_t now = 0;
+        time(&now);
+
+        if (now > MIN_VALID)
+        {
+            hora_sincronizada = true;
+            char buf[64];
+            struct tm ti;
+            localtime_r(&now, &ti);
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &ti);
+            uart_send_msg("[NTP] Hora sincronizada: %s", buf);
+            return true;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+        espera += 500;
+    }
+
+    uart_send_msg("[NTP] Timeout - no se pudo sincronizar");
+    sntp_stop();
+    return false;
+}
+
+bool web_hora_sincronizada(void)
+{
+    return hora_sincronizada;
 }
 
 // ================================================================
@@ -344,17 +409,37 @@ void app_main(void)
     uart_send_msg("[OK] OTA inicializado");
 
     // ============================================
-    // 4. Configurar hora del sistema
-    // ============================================
-    inicializar_hora_sistema();
-
-    // ============================================
-    // 5. Inicializar WiFi (AP + Station)
+    // 4. Inicializar WiFi (AP + Station) primero
     // ============================================
     wifi_init();
 
-    // Pequeña pausa para que WiFi termine de configurarse
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    // ============================================
+    // 5. Sincronizar hora del sistema (NTP o fallback)
+    // ============================================
+    int espera_wifi = 0;
+    while (!wifi_esta_conectado() && espera_wifi < 10000)
+    {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        espera_wifi += 500;
+    }
+
+    if (wifi_esta_conectado())
+    {
+        uart_send_msg("[SISTEMA] WiFi conectado, sincronizando hora vía NTP...");
+        if (!sincronizar_hora_ntp())
+        {
+            inicializar_hora_fallback();
+        }
+    }
+    else
+    {
+        uart_send_msg("[SISTEMA] WiFi no disponible, usando hora por defecto");
+        inicializar_hora_fallback();
+    }
+
+    // Si NTP no respondió, la hora se configuró vía fallback.
+    // El usuario puede ajustarla manualmente con POST /api/time/set
+    // Una vez sincronizada, se puede verificar con GET /api/time
 
     // ============================================
     // 6. Iniciar servidor web

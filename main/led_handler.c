@@ -1,108 +1,98 @@
 #include "led_handler.h"
 #include "gpio_handler.h"
-#include "driver/gpio.h"
+#include "driver/ledc.h"
+#include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-// ============================================================
-// IMPLEMENTACIÓN - LED RGB (Iluminación ambiental)
-// ============================================================
+#define LED_RGB_TIMER       LEDC_TIMER_2
+#define LED_RGB_SPEED_MODE  LEDC_LOW_SPEED_MODE
+#define LED_RGB_RESOLUTION  LEDC_TIMER_8_BIT
+#define LED_RGB_FREQ_HZ     1000
 
-/**
- * led_rgb_init()
- * Inicializa los pines del LED RGB como salidas y los apaga.
- */
+#define LEDR_CHANNEL    LEDC_CHANNEL_2
+#define LEDG_CHANNEL    LEDC_CHANNEL_3
+#define LEDB_CHANNEL    LEDC_CHANNEL_4
+
 void led_rgb_init(void)
 {
-    // Los pines ya fueron configurados como salida en gpio_init_all()
-    // Aquí simplemente aseguramos que inicien apagados (LOW)
-    gpio_set_level(PIN_LED_R, 0);
-    gpio_set_level(PIN_LED_G, 0);
-    gpio_set_level(PIN_LED_B, 0);
+    ledc_timer_config_t timer = {
+        .speed_mode      = LED_RGB_SPEED_MODE,
+        .timer_num       = LED_RGB_TIMER,
+        .freq_hz         = LED_RGB_FREQ_HZ,
+        .clk_cfg         = LEDC_AUTO_CLK,
+        .duty_resolution = LED_RGB_RESOLUTION,
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&timer));
+
+    ledc_channel_config_t ch_r = {
+        .speed_mode = LED_RGB_SPEED_MODE, .channel = LEDR_CHANNEL,
+        .timer_sel  = LED_RGB_TIMER, .gpio_num = PIN_LED_R,
+        .duty = 0, .hpoint = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ch_r));
+
+    ledc_channel_config_t ch_g = {
+        .speed_mode = LED_RGB_SPEED_MODE, .channel = LEDG_CHANNEL,
+        .timer_sel  = LED_RGB_TIMER, .gpio_num = PIN_LED_G,
+        .duty = 0, .hpoint = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ch_g));
+
+    ledc_channel_config_t ch_b = {
+        .speed_mode = LED_RGB_SPEED_MODE, .channel = LEDB_CHANNEL,
+        .timer_sel  = LED_RGB_TIMER, .gpio_num = PIN_LED_B,
+        .duty = 0, .hpoint = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ch_b));
 }
 
-/**
- * led_rgb_set()
- * Establece el color del LED RGB usando PWM por software (bit-banging simple).
- * NOTA: En un sistema real se usarían canales LEDC (PWM por hardware).
- *       Aquí usamos GPIO digital con delays para simular PWM de forma didáctica.
- *
- * Para un mejor rendimiento, reemplazar con LEDC (como en pwm_handler).
- *
- * color: puntero a estructura rgb_color_t con R, G, B (0-255) y brillo (0-100).
- */
 void led_rgb_set(const rgb_color_t *color)
 {
-    // Escalamos los valores de 0-255 a 0-100 para el ciclo de trabajo
-    // y aplicamos el brillo como factor multiplicativo
-    int r_pwm = (color->r * color->brightness) / 255;
-    int g_pwm = (color->g * color->brightness) / 255;
-    int b_pwm = (color->b * color->brightness) / 255;
+    uint32_t duty_r = ((uint32_t)color->r * color->brightness) / 100;
+    uint32_t duty_g = ((uint32_t)color->g * color->brightness) / 100;
+    uint32_t duty_b = ((uint32_t)color->b * color->brightness) / 100;
 
-    // En una implementación real con LEDC, haríamos:
-    // ledc_set_duty_and_update(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, r_pwm * 255 / 100, 0);
-    // ledc_set_duty_and_update(...); // para cada canal
+    if (duty_r > 255) duty_r = 255;
+    if (duty_g > 255) duty_g = 255;
+    if (duty_b > 255) duty_b = 255;
 
-    // Por simplicidad didáctica, usamos GPIO digital:
-    // Si el valor PWM > 50% del ciclo, encendemos; si no, apagamos.
-    // (Esto es una simplificación; el PWM real requiere temporización)
-    gpio_set_level(PIN_LED_R, (r_pwm > 50) ? 1 : 0);
-    gpio_set_level(PIN_LED_G, (g_pwm > 50) ? 1 : 0);
-    gpio_set_level(PIN_LED_B, (b_pwm > 50) ? 1 : 0);
+    ledc_set_duty(LED_RGB_SPEED_MODE, LEDR_CHANNEL, duty_r);
+    ledc_update_duty(LED_RGB_SPEED_MODE, LEDR_CHANNEL);
+
+    ledc_set_duty(LED_RGB_SPEED_MODE, LEDG_CHANNEL, duty_g);
+    ledc_update_duty(LED_RGB_SPEED_MODE, LEDG_CHANNEL);
+
+    ledc_set_duty(LED_RGB_SPEED_MODE, LEDB_CHANNEL, duty_b);
+    ledc_update_duty(LED_RGB_SPEED_MODE, LEDB_CHANNEL);
 }
 
-/**
- * led_rgb_off()
- * Apaga completamente el LED RGB.
- */
 void led_rgb_off(void)
 {
-    gpio_set_level(PIN_LED_R, 0);
-    gpio_set_level(PIN_LED_G, 0);
-    gpio_set_level(PIN_LED_B, 0);
+    ledc_set_duty(LED_RGB_SPEED_MODE, LEDR_CHANNEL, 0);
+    ledc_set_duty(LED_RGB_SPEED_MODE, LEDG_CHANNEL, 0);
+    ledc_set_duty(LED_RGB_SPEED_MODE, LEDB_CHANNEL, 0);
+    ledc_update_duty(LED_RGB_SPEED_MODE, LEDR_CHANNEL);
+    ledc_update_duty(LED_RGB_SPEED_MODE, LEDG_CHANNEL);
+    ledc_update_duty(LED_RGB_SPEED_MODE, LEDB_CHANNEL);
 }
 
-// ============================================================
-// IMPLEMENTACIÓN - LED DE ALARMA (Rojo)
-// ============================================================
-
-/**
- * led_alarma_init()
- * Inicializa el pin del LED de alarma como salida y lo apaga.
- */
 void led_alarma_init(void)
 {
     gpio_set_level(PIN_LED_ALARMA, 0);
 }
 
-/**
- * led_alarma_set()
- * Enciende o apaga el LED de alarma.
- * encendido: true = encender, false = apagar.
- */
 void led_alarma_set(bool encendido)
 {
     gpio_set_level(PIN_LED_ALARMA, encendido ? 1 : 0);
 }
 
-/**
- * led_alarma_parpadeo_task()
- * Tarea FreeRTOS para hacer parpadear el LED de alarma a 1 Hz.
- * Debe ser creada con xTaskCreate() y ejecutarse cuando T > T_max.
- *
- * Esta tarea se puede crear al iniciar la alarma y eliminarse al detenerla.
- *
- * param: no utilizado (puede ser NULL).
- */
 void led_alarma_parpadeo_task(void *param)
 {
     while (1)
     {
-        // Encender LED por 1 segundo
         gpio_set_level(PIN_LED_ALARMA, 1);
         vTaskDelay(pdMS_TO_TICKS(1000));
-
-        // Apagar LED por 1 segundo
         gpio_set_level(PIN_LED_ALARMA, 0);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }

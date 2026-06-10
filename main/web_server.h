@@ -68,4 +68,7 @@ void web_get_schedules(curtain_schedule_t *schedules, int *count);
 void web_set_schedules(curtain_schedule_t *schedules, int count);
 int  web_get_schedule_count(void);
 
+// Indica si la hora del sistema fue sincronizada vía NTP
+bool web_hora_sincronizada(void);
+
 #endif // WEB_SERVER_H

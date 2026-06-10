@@ -43,6 +43,9 @@ void pwm_fan_init(void);
 // La velocidad se mapea linealmente al duty cycle del PWM
 void pwm_fan_set_speed(uint8_t porcentaje);
 
+// Obtiene la velocidad actual del ventilador (0-100%)
+uint8_t pwm_fan_get_speed(void);
+
 // Inicializa el PWM para el servomotor
 void pwm_servo_init(void);
 

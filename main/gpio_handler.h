@@ -17,10 +17,10 @@
 #define PIN_LED_ALARMA      GPIO_NUM_8     // Se enciende cuando T > T_max
 
 // --- Ventilador (PWM para velocidad) ---
-#define PIN_FAN_PWM         GPIO_NUM_18    // Salida PWM para el ventilador
+#define PIN_FAN_PWM         GPIO_NUM_10    // Salida PWM para el ventilador
 
 // --- Servomotor (control de cortinas) ---
-#define PIN_SERVO_PWM       GPIO_NUM_19    // Salida PWM para el servo
+#define PIN_SERVO_PWM       GPIO_NUM_11    // Salida PWM para el servo
 
 // --- Sensor de temperatura (entrada analógica) ---
 #define PIN_TEMP_SENSOR     GPIO_NUM_4     // ADC1_CH4 (solo entrada)

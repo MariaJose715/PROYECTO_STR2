@@ -5,10 +5,12 @@
 #include "led_handler.h"
 #include "wifi_handler.h"
 #include "ota_handler.h"
+#include "dashboard_content.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <sys/time.h>
 #include "esp_http_server.h"
 #include "esp_system.h"
 #include "cJSON.h"
@@ -66,20 +68,6 @@ void web_set_schedules(curtain_schedule_t *s, int count)
 }
 
 // ============================================================
-// ARCHIVOS EMBEBIDOS DEL DASHBOARD WEB
-// Usando EMBED_TXTFILES de ESP-IDF (CMakeLists.txt)
-// ============================================================
-// Los símbolos son generados por EMBED_TXTFILES usando solo el nombre base
-extern const char _binary_index_html_start[];
-extern const char _binary_index_html_end[];
-
-extern const char _binary_style_css_start[];
-extern const char _binary_style_css_end[];
-
-extern const char _binary_app_js_start[];
-extern const char _binary_app_js_end[];
-
-// ============================================================
 // MANEJADORES DE LAS RUTAS HTTP
 // ============================================================
 
@@ -126,24 +114,24 @@ static int leer_cuerpo_post(httpd_req_t *req, char *buffer, size_t buf_size)
 static esp_err_t ruta_raiz(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    httpd_resp_send(req, _binary_index_html_start,
-                    _binary_index_html_end - _binary_index_html_start);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+    httpd_resp_sendstr(req, index_html);
     return ESP_OK;
 }
 
 static esp_err_t ruta_estilo(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/css; charset=utf-8");
-    httpd_resp_send(req, _binary_style_css_start,
-                    _binary_style_css_end - _binary_style_css_start);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+    httpd_resp_sendstr(req, style_css);
     return ESP_OK;
 }
 
 static esp_err_t ruta_script(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "application/javascript; charset=utf-8");
-    httpd_resp_send(req, _binary_app_js_start,
-                    _binary_app_js_end - _binary_app_js_start);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+    httpd_resp_sendstr(req, app_js);
     return ESP_OK;
 }
 
@@ -154,16 +142,30 @@ static esp_err_t ruta_script(httpd_req_t *req)
 static esp_err_t ruta_api_temp(httpd_req_t *req)
 {
     char buffer[512];
+    float temp_act = temperatura_actual;
+
+    time_t now;
+    struct tm ti;
+    time(&now);
+    localtime_r(&now, &ti);
+    char hora_str[32];
+    strftime(hora_str, sizeof(hora_str), "%H:%M:%S", &ti);
+
     snprintf(buffer, sizeof(buffer),
         "{\"temperatura\":%.1f,\"temp_deseada\":%.1f,\"temp_maxima\":%.1f,"
-        "\"fan_speed\":%d,\"curtain_pos\":%d,"
-        "\"alarma\":%s,\"wifi_ip\":\"%s\",\"wifi_conectado\":%s}",
-        temperatura_actual, temp_deseada, temp_maxima,
-        fan_auto_mode ? 0 : fan_speed_manual,
+        "\"fan_speed\":%d,\"fan_auto_mode\":%s,"
+        "\"curtain_pos\":%d,\"alarma\":%s,"
+        "\"wifi_ip\":\"%s\",\"wifi_conectado\":%s,"
+        "\"hora\":\"%s\",\"hora_sincronizada\":%s}",
+        temp_act, temp_deseada, temp_maxima,
+        pwm_fan_get_speed(),
+        fan_auto_mode ? "true" : "false",
         curtain_position,
-        (temperatura_actual > temp_maxima) ? "true" : "false",
+        (temp_act > temp_maxima) ? "true" : "false",
         wifi_obtener_ip_sta(),
-        wifi_esta_conectado() ? "true" : "false");
+        wifi_esta_conectado() ? "true" : "false",
+        hora_str,
+        web_hora_sincronizada() ? "true" : "false");
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, buffer, strlen(buffer));
@@ -177,6 +179,7 @@ static esp_err_t ruta_api_temp(httpd_req_t *req)
  */
 static esp_err_t ruta_fan_mode(httpd_req_t *req)
 {
+    uart_send_msg("[DBG] POST /api/fan/mode");
     char content[128];
     leer_cuerpo_post(req, content, sizeof(content));
     cJSON *json = cJSON_Parse(content);
@@ -191,6 +194,10 @@ static esp_err_t ruta_fan_mode(httpd_req_t *req)
         }
         cJSON_Delete(json);
     }
+    else
+    {
+        uart_send_msg("[DBG] JSON parse error: %s", content);
+    }
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -204,6 +211,7 @@ static esp_err_t ruta_fan_mode(httpd_req_t *req)
  */
 static esp_err_t ruta_fan_config(httpd_req_t *req)
 {
+    uart_send_msg("[DBG] POST /api/fan/config");
     char content[128];
     leer_cuerpo_post(req, content, sizeof(content));
     cJSON *json = cJSON_Parse(content);
@@ -217,6 +225,7 @@ static esp_err_t ruta_fan_config(httpd_req_t *req)
         uart_send_msg("[WEB] Temp config: Deseada=%.1f, Max=%.1f", temp_deseada, temp_maxima);
         cJSON_Delete(json);
     }
+    else uart_send_msg("[DBG] JSON parse error: %s", content);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -230,6 +239,7 @@ static esp_err_t ruta_fan_config(httpd_req_t *req)
  */
 static esp_err_t ruta_fan_speed(httpd_req_t *req)
 {
+    uart_send_msg("[DBG] POST /api/fan/speed");
     char content[128];
     leer_cuerpo_post(req, content, sizeof(content));
     cJSON *json = cJSON_Parse(content);
@@ -247,6 +257,7 @@ static esp_err_t ruta_fan_speed(httpd_req_t *req)
         }
         cJSON_Delete(json);
     }
+    else uart_send_msg("[DBG] JSON parse error: %s", content);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -259,6 +270,7 @@ static esp_err_t ruta_fan_speed(httpd_req_t *req)
  */
 static esp_err_t ruta_curtain_mode(httpd_req_t *req)
 {
+    uart_send_msg("[DBG] POST /api/curtain/mode");
     char content[128];
     leer_cuerpo_post(req, content, sizeof(content));
     cJSON *json = cJSON_Parse(content);
@@ -273,6 +285,7 @@ static esp_err_t ruta_curtain_mode(httpd_req_t *req)
         }
         cJSON_Delete(json);
     }
+    else uart_send_msg("[DBG] JSON parse error: %s", content);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -285,6 +298,7 @@ static esp_err_t ruta_curtain_mode(httpd_req_t *req)
  */
 static esp_err_t ruta_curtain_position(httpd_req_t *req)
 {
+    uart_send_msg("[DBG] POST /api/curtain/position");
     char content[128];
     leer_cuerpo_post(req, content, sizeof(content));
     cJSON *json = cJSON_Parse(content);
@@ -302,6 +316,7 @@ static esp_err_t ruta_curtain_position(httpd_req_t *req)
         }
         cJSON_Delete(json);
     }
+    else uart_send_msg("[DBG] JSON parse error: %s", content);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -316,7 +331,7 @@ static esp_err_t ruta_curtain_position(httpd_req_t *req)
 static esp_err_t ruta_curtain_schedule_post(httpd_req_t *req)
 {
     char content[2048];
-    int len = leer_cuerpo_post(req, content, sizeof(content));
+    leer_cuerpo_post(req, content, sizeof(content));
 
     cJSON *json = cJSON_Parse(content);
     if (json)
@@ -353,12 +368,14 @@ static esp_err_t ruta_curtain_schedule_post(httpd_req_t *req)
  */
 static esp_err_t ruta_curtain_schedule_get(httpd_req_t *req)
 {
-    char buffer[1024];
+    char buffer[2048];
     int offset = snprintf(buffer, sizeof(buffer), "{\"schedules\":[");
 
     for (int i = 0; i < schedule_count; i++)
     {
-        offset += snprintf(buffer + offset, sizeof(buffer) - offset,
+        int remaining = sizeof(buffer) - offset;
+        if (remaining < 64) break;
+        offset += snprintf(buffer + offset, remaining,
             "%s{\"hora\":%d,\"minuto\":%d,\"apertura\":%d,\"activo\":%s}",
             (i > 0) ? "," : "",
             schedules[i].hora, schedules[i].minuto, schedules[i].apertura,
@@ -379,6 +396,7 @@ static esp_err_t ruta_curtain_schedule_get(httpd_req_t *req)
  */
 static esp_err_t ruta_rgb(httpd_req_t *req)
 {
+    uart_send_msg("[DBG] POST /api/rgb");
     char content[256];
     leer_cuerpo_post(req, content, sizeof(content));
     cJSON *json = cJSON_Parse(content);
@@ -395,13 +413,13 @@ static esp_err_t ruta_rgb(httpd_req_t *req)
 
         web_set_rgb_color(r, g, b, br);
 
-        // Aplicar al LED RGB
         rgb_color_t color = { .r = r, .g = g, .b = b, .brightness = br };
         led_rgb_set(&color);
 
         uart_send_msg("[WEB] RGB: R=%d G=%d B=%d Brillo=%d%%", r, g, b, br);
         cJSON_Delete(json);
     }
+    else uart_send_msg("[DBG] JSON parse error: %s", content);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -415,6 +433,7 @@ static esp_err_t ruta_rgb(httpd_req_t *req)
  */
 static esp_err_t ruta_wifi_sta(httpd_req_t *req)
 {
+    uart_send_msg("[DBG] POST /api/wifi/sta");
     char content[512];
     leer_cuerpo_post(req, content, sizeof(content));
     cJSON *json = cJSON_Parse(content);
@@ -446,6 +465,7 @@ static esp_err_t ruta_wifi_sta(httpd_req_t *req)
  */
 static esp_err_t ruta_wifi_ap(httpd_req_t *req)
 {
+    uart_send_msg("[DBG] POST /api/wifi/ap");
     char content[512];
     leer_cuerpo_post(req, content, sizeof(content));
     cJSON *json = cJSON_Parse(content);
@@ -477,6 +497,7 @@ static esp_err_t ruta_wifi_ap(httpd_req_t *req)
  */
 static esp_err_t ruta_ota(httpd_req_t *req)
 {
+    uart_send_msg("[DBG] POST /api/ota");
     char content[1024];
     leer_cuerpo_post(req, content, sizeof(content));
     cJSON *json = cJSON_Parse(content);
@@ -511,6 +532,86 @@ static esp_err_t ruta_ota_version(httpd_req_t *req)
     return ESP_OK;
 }
 
+/**
+ * Ruta: GET /api/ping
+ * Endpoint de diagnóstico para verificar que el servidor responde.
+ */
+static esp_err_t ruta_ping(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"pong\":true,\"server\":\"STR2026\"}");
+    return ESP_OK;
+}
+
+static esp_err_t ruta_time_get(httpd_req_t *req)
+{
+    time_t now;
+    struct tm ti;
+    time(&now);
+    localtime_r(&now, &ti);
+
+    httpd_resp_set_type(req, "application/json");
+    char buf[128];
+    snprintf(buf, sizeof(buf),
+        "{\"hora\":%d,\"min\":%d,\"seg\":%d,\"anio\":%d,\"mes\":%d,\"dia\":%d}",
+        ti.tm_hour, ti.tm_min, ti.tm_sec,
+        ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday);
+    httpd_resp_sendstr(req, buf);
+    return ESP_OK;
+}
+
+static esp_err_t ruta_time_set(httpd_req_t *req)
+{
+    char content[128];
+    int len = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (len <= 0)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad Request");
+        return ESP_FAIL;
+    }
+    content[len] = '\0';
+
+    cJSON *json = cJSON_Parse(content);
+    if (!json)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    int h = 8, m = 0, s = 0;
+    cJSON *h_item = cJSON_GetObjectItem(json, "hora");
+    cJSON *m_item = cJSON_GetObjectItem(json, "min");
+    cJSON *s_item = cJSON_GetObjectItem(json, "seg");
+    if (h_item) h = h_item->valueint;
+    if (m_item) m = m_item->valueint;
+    if (s_item) s = s_item->valueint;
+    cJSON_Delete(json);
+
+    if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid time");
+        return ESP_FAIL;
+    }
+
+    struct tm tm_set;
+    time_t now;
+    time(&now);
+    localtime_r(&now, &tm_set);
+    tm_set.tm_hour = h;
+    tm_set.tm_min  = m;
+    tm_set.tm_sec  = s;
+
+    time_t t = mktime(&tm_set);
+    struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
+    settimeofday(&tv, NULL);
+
+    uart_send_msg("[WEB] Hora cambiada a %02d:%02d:%02d", h, m, s);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
 // ============================================================
 // REGISTRO DE RUTAS
 // ============================================================
@@ -522,61 +623,43 @@ static esp_err_t ruta_ota_version(httpd_req_t *req)
 void web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 16;       // Suficientes para todas nuestras rutas
+    config.max_uri_handlers = 26;
     config.lru_purge_enable = true;     // Liberar conexiones viejas si es necesario
+
+    esp_err_t reg_ok = ESP_OK;
 
     if (httpd_start(&server, &config) == ESP_OK)
     {
-        // Registrar rutas
-        httpd_uri_t uri_raiz = { .uri = "/", .method = HTTP_GET, .handler = ruta_raiz, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_raiz);
+#define REG_URI(u, m, h) do { \
+    httpd_uri_t uri = { .uri = u, .method = m, .handler = h, .user_ctx = NULL }; \
+    esp_err_t e = httpd_register_uri_handler(server, &uri); \
+    if (e != ESP_OK) { uart_send_msg("[WEB] Error registrando %s: %s", u, esp_err_to_name(e)); reg_ok = e; } \
+} while(0)
 
-        httpd_uri_t uri_estilo = { .uri = "/style.css", .method = HTTP_GET, .handler = ruta_estilo, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_estilo);
+        REG_URI("/", HTTP_GET, ruta_raiz);
+        REG_URI("/style.css", HTTP_GET, ruta_estilo);
+        REG_URI("/app.js", HTTP_GET, ruta_script);
+        REG_URI("/api/ping", HTTP_GET, ruta_ping);
+        REG_URI("/api/temp", HTTP_GET, ruta_api_temp);
+        REG_URI("/api/fan/mode", HTTP_POST, ruta_fan_mode);
+        REG_URI("/api/fan/config", HTTP_POST, ruta_fan_config);
+        REG_URI("/api/fan/speed", HTTP_POST, ruta_fan_speed);
+        REG_URI("/api/curtain/mode", HTTP_POST, ruta_curtain_mode);
+        REG_URI("/api/curtain/position", HTTP_POST, ruta_curtain_position);
+        REG_URI("/api/curtain/schedule", HTTP_POST, ruta_curtain_schedule_post);
+        REG_URI("/api/curtain/schedule", HTTP_GET, ruta_curtain_schedule_get);
+        REG_URI("/api/rgb", HTTP_POST, ruta_rgb);
+        REG_URI("/api/wifi/sta", HTTP_POST, ruta_wifi_sta);
+        REG_URI("/api/wifi/ap", HTTP_POST, ruta_wifi_ap);
+        REG_URI("/api/ota", HTTP_POST, ruta_ota);
+        REG_URI("/api/ota/version", HTTP_GET, ruta_ota_version);
+        REG_URI("/api/time", HTTP_GET, ruta_time_get);
+        REG_URI("/api/time/set", HTTP_POST, ruta_time_set);
 
-        httpd_uri_t uri_script = { .uri = "/app.js", .method = HTTP_GET, .handler = ruta_script, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_script);
-
-        httpd_uri_t uri_temp = { .uri = "/api/temp", .method = HTTP_GET, .handler = ruta_api_temp, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_temp);
-
-        httpd_uri_t uri_fan_mode = { .uri = "/api/fan/mode", .method = HTTP_POST, .handler = ruta_fan_mode, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_fan_mode);
-
-        httpd_uri_t uri_fan_config = { .uri = "/api/fan/config", .method = HTTP_POST, .handler = ruta_fan_config, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_fan_config);
-
-        httpd_uri_t uri_fan_speed = { .uri = "/api/fan/speed", .method = HTTP_POST, .handler = ruta_fan_speed, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_fan_speed);
-
-        httpd_uri_t uri_curtain_mode = { .uri = "/api/curtain/mode", .method = HTTP_POST, .handler = ruta_curtain_mode, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_curtain_mode);
-
-        httpd_uri_t uri_curtain_pos = { .uri = "/api/curtain/position", .method = HTTP_POST, .handler = ruta_curtain_position, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_curtain_pos);
-
-        httpd_uri_t uri_curtain_sched_post = { .uri = "/api/curtain/schedule", .method = HTTP_POST, .handler = ruta_curtain_schedule_post, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_curtain_sched_post);
-
-        httpd_uri_t uri_curtain_sched_get = { .uri = "/api/curtain/schedule", .method = HTTP_GET, .handler = ruta_curtain_schedule_get, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_curtain_sched_get);
-
-        httpd_uri_t uri_rgb = { .uri = "/api/rgb", .method = HTTP_POST, .handler = ruta_rgb, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_rgb);
-
-        httpd_uri_t uri_wifi_sta = { .uri = "/api/wifi/sta", .method = HTTP_POST, .handler = ruta_wifi_sta, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_wifi_sta);
-
-        httpd_uri_t uri_wifi_ap = { .uri = "/api/wifi/ap", .method = HTTP_POST, .handler = ruta_wifi_ap, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_wifi_ap);
-
-        httpd_uri_t uri_ota = { .uri = "/api/ota", .method = HTTP_POST, .handler = ruta_ota, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_ota);
-
-        httpd_uri_t uri_ota_version = { .uri = "/api/ota/version", .method = HTTP_GET, .handler = ruta_ota_version, .user_ctx = NULL };
-        httpd_register_uri_handler(server, &uri_ota_version);
-
-        uart_send_msg("[WEB] Servidor HTTP iniciado en puerto 80");
+        if (reg_ok == ESP_OK)
+            uart_send_msg("[WEB] Servidor HTTP iniciado en puerto 80");
+        else
+            uart_send_msg("[WEB] Servidor iniciado con errores en algunas rutas");
     }
     else
     {
