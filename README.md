@@ -424,27 +424,5 @@ Para conectar el ESP32 a una red WiFi existente (opcional):
 
 ---
 
-## Partición
 
-El proyecto usa `CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE` porque el binario
-(~1.12 MB) excede el tamaño de la partición factory predeterminada (1 MB).
 
----
-
-## Historial de correcciones
-
-| Problema | Solución |
-|----------|----------|
-| LED RGB sin variación de brillo | Se reemplazó GPIO binario (threshold 50) por PWM LEDC con 3 canales independientes |
-| Ventilador no proporcional | Se corrigieron constantes NTC (R_FIJO=10k, R0=10k) y se agregó protección NaN en logf() |
-| Inputs de temperatura se reiniciaban cada 3s | Se agregó verificación de `document.activeElement` en JS |
-| Horario de cortinas no ejecutaba servo | Se agregó sincronización NTP + endpoint `/api/time/set` para pruebas |
-| Dashboard embebido no se servía | Se migró de `EMBED_TXTFILES` a raw string literals C11 |
-| Error JS (ternario incompleto) | Se corrigió `'Auto: '` → `'Auto: ':'` |
-| Buffer overflow en schedule GET | Se aumentó buffer a 2048 bytes + safety check |
-
----
-
-## Licencia
-
-Proyecto académico — Sistemas de Tiempo Real, Universidad Mariano Gálvez, 2026.
