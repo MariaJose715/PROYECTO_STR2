@@ -1,29 +1,23 @@
+/**
+ * adc_handler.h - LECTURA DE TEMPERATURA CON NTC VÍA ADC
+ *
+ * Circuito: divisor de voltaje con NTC 10k (B=3950)
+ *   3.3V ─── NTC ─── ADC_GPIO4 ─── 10kΩ ─── GND
+ *
+ * Canal ADC: ADC1_CHANNEL_4 (GPIO4 del ESP32-C6)
+ * Atenuación: 12 dB (rango de entrada 0-3.3V)
+ */
+
 #ifndef ADC_HANDLER_H
 #define ADC_HANDLER_H
 
 #include <stdint.h>
 
-// ============================================================
-// MANEJADOR ADC (Conversión Analógico-Digital)
-// Lee la temperatura ambiente desde un sensor analógico (ej: LM35)
-// Usa la API moderna de ADC (oneshot) compatible con ESP32-C6
-// ============================================================
+#define ADC_TEMP_CHANNEL    ADC_CHANNEL_4
+#define ADC_TEMP_ATTEN      ADC_ATTEN_DB_12
 
-#define ADC_TEMP_CHANNEL    ADC_CHANNEL_4   // GPIO4 = ADC1_CH4 (ESP32-C6)
-#define ADC_TEMP_ATTEN      ADC_ATTEN_DB_12 // Atenuación 12dB (0-3.3V)
-
-// ============================================================
-// PROTOTIPOS
-// ============================================================
-
-// Inicializa el ADC para el sensor de temperatura
 void adc_temp_init(void);
-
-// Lee el valor crudo del ADC (0 - 4095 para 12 bits)
-int adc_temp_read_raw(void);
-
-// Lee y convierte la temperatura a grados Celsius
-// Circuito: NTC 10k (B=3950) + resistor 10kΩ en divisor de voltaje
+int  adc_temp_read_raw(void);
 float adc_temp_read_celsius(void);
 
-#endif // ADC_HANDLER_H
+#endif

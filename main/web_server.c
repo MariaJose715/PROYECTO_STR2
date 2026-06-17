@@ -1,3 +1,48 @@
+/**
+ * ================================================================
+ * web_server.c - SERVIDOR WEB HTTP (Dashboard + API REST)
+ * ================================================================
+ *
+ * Este archivo implementa un servidor HTTP usando la API
+ * esp_http_server de ESP-IDF. Sirve:
+ *
+ *   1. Páginas web estáticas (HTML, CSS, JS) embebidas en
+ *      dashboard_content.c (raw string literals C11)
+ *   2. API REST con 19 endpoints para controlar y monitorear
+ *      todos los periféricos del sistema
+ *
+ * Rutas de la API REST:
+ *   GET  /                    -> Dashboard HTML
+ *   GET  /style.css           -> Estilos CSS
+ *   GET  /app.js              -> JavaScript del dashboard
+ *   GET  /api/ping            -> Diagnóstico (pong)
+ *   GET  /api/temp            -> Temperatura, ventilador, alarma
+ *   POST /api/fan/mode        -> Cambiar modo (auto/manual)
+ *   POST /api/fan/config      -> Temperatura deseada/máxima
+ *   POST /api/fan/speed       -> Velocidad manual del ventilador
+ *   POST /api/curtain/mode    -> Cambiar modo (programado/manual)
+ *   POST /api/curtain/position -> Posición manual de cortina
+ *   GET  /api/curtain/schedule -> Obtener horarios
+ *   POST /api/curtain/schedule -> Guardar horarios
+ *   POST /api/rgb             -> Color y brillo LED RGB
+ *   POST /api/wifi/sta        -> Conectar a red WiFi
+ *   POST /api/wifi/ap         -> Cambiar AP
+ *   POST /api/ota             -> Iniciar actualización OTA
+ *   GET  /api/ota/version     -> Versión del firmware
+ *   GET  /api/time            -> Obtener hora actual
+ *   POST /api/time/set        -> Ajustar hora manual
+ *
+ * Estructura del código:
+ *   1. Variables de estado compartido
+ *   2. Funciones de acceso (getters/setters)
+ *   3. Funciones auxiliares (leer cuerpo POST)
+ *   4. Manejadores de rutas HTTP
+ *   5. Inicialización del servidor
+ *
+ * Referencia: ejemplo oficial http_server de ESP-IDF
+ * ================================================================
+ */
+
 #include "web_server.h"
 #include "uart_handler.h"
 #include "pwm_handler.h"
@@ -18,15 +63,25 @@
 // ============================================================
 // VARIABLES DE ESTADO COMPARTIDO
 // ============================================================
+//
+// Estas variables mantienen el estado actual de todos los
+// parámetros controlables desde el dashboard. Son accedidas
+// tanto desde los manejadores HTTP como desde la tarea de
+// control en main.c.
+//
+// La sincronización entre tareas se maneja con variables
+// simples (sin mutex) porque el acceso es atómico para tipos
+// pequeños en ESP32 (lectura/escritura de int/float son
+// atómicas en arquitectura de 32 bits).
 
-static float temperatura_actual = 25.0f;      // Última lectura de temperatura
+static float temperatura_actual = 25.0f;      // Última lectura de temperatura (°C)
 static float temp_deseada = 25.0f;             // Temperatura deseada por el usuario
 static float temp_maxima = 35.0f;              // Temperatura máxima permitida
 static bool  fan_auto_mode = true;             // true = automático, false = manual
 static uint8_t fan_speed_manual = 50;           // Velocidad manual del ventilador (0-100%)
 static bool  curtain_auto_mode = true;          // true = programado, false = manual
 static uint8_t curtain_position = 50;           // Posición manual de cortina (0-100%)
-static uint8_t rgb_r = 255, rgb_g = 255, rgb_b = 255;  // Color RGB
+static uint8_t rgb_r = 255, rgb_g = 255, rgb_b = 255;  // Color RGB (0-255)
 static uint8_t rgb_brillo = 50;                 // Brillo (0-100%)
 
 static curtain_schedule_t schedules[MAX_CURTAIN_SCHEDULES];  // Horarios de cortina
@@ -37,6 +92,9 @@ static httpd_handle_t server = NULL;  // Manejador del servidor HTTP
 // ============================================================
 // FUNCIONES DE ACCESO A VARIABLES COMPARTIDAS
 // ============================================================
+//
+// Getters y setters para que otros módulos (especialmente main.c)
+// puedan leer y modificar el estado compartido.
 
 float web_get_temperatura_actual(void) { return temperatura_actual; }
 void  web_set_temperatura_actual(float temp) { temperatura_actual = temp; }
@@ -68,20 +126,23 @@ void web_set_schedules(curtain_schedule_t *s, int count)
 }
 
 // ============================================================
-// MANEJADORES DE LAS RUTAS HTTP
+// FUNCIONES AUXILIARES
 // ============================================================
 
-/**
- * leer_cuerpo_post()
- * Lee el cuerpo de una solicitud POST de forma segura,
- * respetando content_length. (Patrón del ejemplo http_server)
- *
- * req:     manejador de la solicitud
- * buffer:  donde almacenar el body
- * buf_size: tamaño máximo del buffer
- *
- * Retorna: número de bytes leídos, o -1 en error.
- */
+// ================================================================
+// leer_cuerpo_post()
+// ================================================================
+// Lee el cuerpo de una solicitud POST de forma segura.
+//
+// La API httpd_req_recv() puede retornar HTTPD_SOCK_ERR_TIMEOUT
+// si la conexión es lenta. Este manejador reintenta en ese caso.
+//
+// Parámetros:
+//   req:     manejador de la solicitud HTTP
+//   buffer:  donde almacenar el body
+//   buf_size: tamaño máximo del buffer (incluye el nulo final)
+//
+// Retorna: número de bytes leídos, o -1 en error grave.
 static int leer_cuerpo_post(httpd_req_t *req, char *buffer, size_t buf_size)
 {
     int total_len = 0;
@@ -90,6 +151,7 @@ static int leer_cuerpo_post(httpd_req_t *req, char *buffer, size_t buf_size)
     memset(buffer, 0, buf_size);
     size_t remaining = req->content_len;
 
+    // Limitar al tamaño del buffer (dejar espacio para \0)
     if (remaining >= buf_size) remaining = buf_size - 1;
 
     while (remaining > 0)
@@ -97,7 +159,7 @@ static int leer_cuerpo_post(httpd_req_t *req, char *buffer, size_t buf_size)
         ret = httpd_req_recv(req, buffer + total_len, remaining);
         if (ret <= 0)
         {
-            if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;  // Reintentar
             return -1;  // Error real
         }
         total_len += ret;
@@ -107,9 +169,16 @@ static int leer_cuerpo_post(httpd_req_t *req, char *buffer, size_t buf_size)
     return total_len;
 }
 
+// ============================================================
+// MANEJADORES DE LAS RUTAS HTTP
+// ============================================================
+
+// ---- RUTAS ESTÁTICAS (Dashboard) ----
+
 /**
- * Ruta: GET /
- * Sirve la página web principal embebida.
+ * GET / -> Sirve la página HTML principal del dashboard.
+ * El contenido está embebido en dashboard_content.c como
+ * raw string literal C11 (R"hdash(...)hdash").
  */
 static esp_err_t ruta_raiz(httpd_req_t *req)
 {
@@ -119,6 +188,9 @@ static esp_err_t ruta_raiz(httpd_req_t *req)
     return ESP_OK;
 }
 
+/**
+ * GET /style.css -> Sirve los estilos CSS del dashboard.
+ */
 static esp_err_t ruta_estilo(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/css; charset=utf-8");
@@ -127,6 +199,11 @@ static esp_err_t ruta_estilo(httpd_req_t *req)
     return ESP_OK;
 }
 
+/**
+ * GET /app.js -> Sirve el JavaScript del dashboard.
+ * Contiene la lógica de actualización en tiempo real y
+ * las llamadas AJAX a la API REST.
+ */
 static esp_err_t ruta_script(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "application/javascript; charset=utf-8");
@@ -135,15 +212,27 @@ static esp_err_t ruta_script(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ---- RUTAS API ----
+
 /**
- * Ruta: GET /api/temp
- * Devuelve la temperatura actual, configuración del ventilador y estado de alarma.
+ * GET /api/temp -> Devuelve JSON con:
+ *   - Temperatura actual, deseada y máxima
+ *   - Velocidad del ventilador
+ *   - Modo del ventilador (auto/manual)
+ *   - Posición de la cortina
+ *   - Estado de alarma
+ *   - Información WiFi (IP, conexión)
+ *   - Hora actual y flag de sincronización NTP
+ *
+ * Este es el endpoint principal que el dashboard consulta
+ * cada 3 segundos para actualizar la interfaz.
  */
 static esp_err_t ruta_api_temp(httpd_req_t *req)
 {
     char buffer[512];
     float temp_act = temperatura_actual;
 
+    // Obtener hora actual del sistema
     time_t now;
     struct tm ti;
     time(&now);
@@ -173,9 +262,8 @@ static esp_err_t ruta_api_temp(httpd_req_t *req)
 }
 
 /**
- * Ruta: POST /api/fan/mode
- * Cambia el modo del ventilador (automático/manual).
- * Body: {"auto_mode": true/false}
+ * POST /api/fan/mode -> Cambia el modo del ventilador.
+ * Body: {"auto_mode": true} o {"auto_mode": false}
  */
 static esp_err_t ruta_fan_mode(httpd_req_t *req)
 {
@@ -205,8 +293,7 @@ static esp_err_t ruta_fan_mode(httpd_req_t *req)
 }
 
 /**
- * Ruta: POST /api/fan/config
- * Guarda la temperatura deseada y máxima.
+ * POST /api/fan/config -> Guarda las temperaturas de configuración.
  * Body: {"temp_deseada": 25.0, "temp_maxima": 35.0}
  */
 static esp_err_t ruta_fan_config(httpd_req_t *req)
@@ -233,8 +320,7 @@ static esp_err_t ruta_fan_config(httpd_req_t *req)
 }
 
 /**
- * Ruta: POST /api/fan/speed
- * Establece la velocidad manual del ventilador.
+ * POST /api/fan/speed -> Establece velocidad manual del ventilador.
  * Body: {"speed": 75}
  */
 static esp_err_t ruta_fan_speed(httpd_req_t *req)
@@ -252,7 +338,7 @@ static esp_err_t ruta_fan_speed(httpd_req_t *req)
             uint8_t speed = (uint8_t)sp->valueint;
             if (speed > 100) speed = 100;
             web_set_fan_speed_manual(speed);
-            if (!fan_auto_mode) pwm_fan_set_speed(speed);
+            if (!fan_auto_mode) pwm_fan_set_speed(speed);  // Aplicar inmediato si manual
             uart_send_msg("[WEB] Fan velocidad manual: %d%%", speed);
         }
         cJSON_Delete(json);
@@ -265,8 +351,8 @@ static esp_err_t ruta_fan_speed(httpd_req_t *req)
 }
 
 /**
- * Ruta: POST /api/curtain/mode
- * Cambia el modo de cortina (automático/manual).
+ * POST /api/curtain/mode -> Cambia modo de cortina.
+ * Body: {"auto_mode": true/false}
  */
 static esp_err_t ruta_curtain_mode(httpd_req_t *req)
 {
@@ -293,8 +379,8 @@ static esp_err_t ruta_curtain_mode(httpd_req_t *req)
 }
 
 /**
- * Ruta: POST /api/curtain/position
- * Establece la posición manual de la cortina.
+ * POST /api/curtain/position -> Establece posición manual de cortina.
+ * Body: {"position": 75}
  */
 static esp_err_t ruta_curtain_position(httpd_req_t *req)
 {
@@ -311,7 +397,7 @@ static esp_err_t ruta_curtain_position(httpd_req_t *req)
             uint8_t p = (uint8_t)pos->valueint;
             if (p > 100) p = 100;
             web_set_curtain_position(p);
-            if (!curtain_auto_mode) pwm_servo_set_position(p);
+            if (!curtain_auto_mode) pwm_servo_set_position(p);  // Mover inmediato
             uart_send_msg("[WEB] Cortina posición: %d%%", p);
         }
         cJSON_Delete(json);
@@ -324,8 +410,7 @@ static esp_err_t ruta_curtain_position(httpd_req_t *req)
 }
 
 /**
- * Ruta: POST /api/curtain/schedule
- * Guarda los horarios programados de cortina.
+ * POST /api/curtain/schedule -> Guarda horarios de cortina.
  * Body: {"schedules": [{"hora":8,"minuto":0,"apertura":50,"activo":true}, ...]}
  */
 static esp_err_t ruta_curtain_schedule_post(httpd_req_t *req)
@@ -363,8 +448,7 @@ static esp_err_t ruta_curtain_schedule_post(httpd_req_t *req)
 }
 
 /**
- * Ruta: GET /api/curtain/schedule
- * Devuelve los horarios guardados de cortina.
+ * GET /api/curtain/schedule -> Devuelve los horarios guardados.
  */
 static esp_err_t ruta_curtain_schedule_get(httpd_req_t *req)
 {
@@ -390,8 +474,7 @@ static esp_err_t ruta_curtain_schedule_get(httpd_req_t *req)
 }
 
 /**
- * Ruta: POST /api/rgb
- * Establece el color y brillo del LED RGB.
+ * POST /api/rgb -> Establece color y brillo del LED RGB.
  * Body: {"r":255,"g":100,"b":50,"brillo":80}
  */
 static esp_err_t ruta_rgb(httpd_req_t *req)
@@ -414,7 +497,7 @@ static esp_err_t ruta_rgb(httpd_req_t *req)
         web_set_rgb_color(r, g, b, br);
 
         rgb_color_t color = { .r = r, .g = g, .b = b, .brightness = br };
-        led_rgb_set(&color);
+        led_rgb_set(&color);  // Aplicar al hardware
 
         uart_send_msg("[WEB] RGB: R=%d G=%d B=%d Brillo=%d%%", r, g, b, br);
         cJSON_Delete(json);
@@ -427,8 +510,7 @@ static esp_err_t ruta_rgb(httpd_req_t *req)
 }
 
 /**
- * Ruta: POST /api/wifi/sta
- * Conecta el ESP32 a una red WiFi (Station).
+ * POST /api/wifi/sta -> Conecta el ESP32 a una red WiFi (Station).
  * Body: {"ssid":"MiRed","password":"clave123"}
  */
 static esp_err_t ruta_wifi_sta(httpd_req_t *req)
@@ -459,8 +541,7 @@ static esp_err_t ruta_wifi_sta(httpd_req_t *req)
 }
 
 /**
- * Ruta: POST /api/wifi/ap
- * Cambia el SSID y contraseña del AP.
+ * POST /api/wifi/ap -> Cambia SSID y contraseña del AP.
  * Body: {"ssid":"NuevoAP","password":"clave1234"}
  */
 static esp_err_t ruta_wifi_ap(httpd_req_t *req)
@@ -491,8 +572,7 @@ static esp_err_t ruta_wifi_ap(httpd_req_t *req)
 }
 
 /**
- * Ruta: POST /api/ota
- * Inicia una actualización OTA desde una URL.
+ * POST /api/ota -> Inicia actualización OTA desde URL.
  * Body: {"url":"http://ejemplo.com/firmware.bin"}
  */
 static esp_err_t ruta_ota(httpd_req_t *req)
@@ -519,8 +599,7 @@ static esp_err_t ruta_ota(httpd_req_t *req)
 }
 
 /**
- * Ruta: GET /api/ota/version
- * Devuelve la versión actual de la partición OTA.
+ * GET /api/ota/version -> Versión actual del firmware.
  */
 static esp_err_t ruta_ota_version(httpd_req_t *req)
 {
@@ -533,8 +612,7 @@ static esp_err_t ruta_ota_version(httpd_req_t *req)
 }
 
 /**
- * Ruta: GET /api/ping
- * Endpoint de diagnóstico para verificar que el servidor responde.
+ * GET /api/ping -> Endpoint de diagnóstico.
  */
 static esp_err_t ruta_ping(httpd_req_t *req)
 {
@@ -543,6 +621,10 @@ static esp_err_t ruta_ping(httpd_req_t *req)
     return ESP_OK;
 }
 
+/**
+ * GET /api/time -> Obtiene la hora actual del sistema.
+ * Retorna: hora, minuto, segundo, año, mes, día.
+ */
 static esp_err_t ruta_time_get(httpd_req_t *req)
 {
     time_t now;
@@ -560,6 +642,13 @@ static esp_err_t ruta_time_get(httpd_req_t *req)
     return ESP_OK;
 }
 
+/**
+ * POST /api/time/set -> Ajusta la hora manualmente.
+ * Body: {"hora":14,"min":30,"seg":0}
+ *
+ * Útil cuando el NTP no está disponible y el usuario
+ * necesita sincronizar la hora para los horarios de cortina.
+ */
 static esp_err_t ruta_time_set(httpd_req_t *req)
 {
     char content[128];
@@ -587,12 +676,14 @@ static esp_err_t ruta_time_set(httpd_req_t *req)
     if (s_item) s = s_item->valueint;
     cJSON_Delete(json);
 
+    // Validar rangos
     if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59)
     {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid time");
         return ESP_FAIL;
     }
 
+    // Ajustar solo la hora del día (conservar fecha actual)
     struct tm tm_set;
     time_t now;
     time(&now);
@@ -601,6 +692,7 @@ static esp_err_t ruta_time_set(httpd_req_t *req)
     tm_set.tm_min  = m;
     tm_set.tm_sec  = s;
 
+    // Establecer la nueva hora en el sistema
     time_t t = mktime(&tm_set);
     struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
     settimeofday(&tv, NULL);
@@ -613,18 +705,28 @@ static esp_err_t ruta_time_set(httpd_req_t *req)
 }
 
 // ============================================================
-// REGISTRO DE RUTAS
+// REGISTRO DE RUTAS E INICIALIZACIÓN DEL SERVIDOR
 // ============================================================
 
 /**
  * web_server_start()
  * Inicializa el servidor HTTP y registra todas las rutas.
+ *
+ * La macro REG_URI simplifica el registro de cada ruta:
+ *   - Toma URI, método HTTP y función manejadora
+ *   - Reporta errores por UART si alguna ruta falla
+ *   - La macro do { ... } while(0) permite usarla como
+ *     una declaración normal (requiere punto y coma al final)
+ *
+ * Configuración del servidor:
+ *   max_uri_handlers = 26 (suficiente para 19 rutas + margen)
+ *   lru_purge_enable = true (libera conexiones inactivas)
  */
 void web_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 26;
-    config.lru_purge_enable = true;     // Liberar conexiones viejas si es necesario
+    config.lru_purge_enable = true;
 
     esp_err_t reg_ok = ESP_OK;
 
@@ -669,7 +771,7 @@ void web_server_start(void)
 
 /**
  * web_server_stop()
- * Detiene el servidor HTTP.
+ * Detiene el servidor HTTP de forma segura.
  */
 void web_server_stop(void)
 {
