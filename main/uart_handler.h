@@ -1,23 +1,26 @@
-/**
- * uart_handler.h - MANEJO DE UART PARA DEPURACIÓN
- *
- * La UART0 (GPIO16=TX, GPIO17=RX) se usa para:
- *   - Mensajes de depuración durante inicialización
- *   - Log de eventos del sistema (WiFi, OTA, alarmas)
- *   - Posible interfaz de comandos vía terminal serie
- *
- * Baud rate: 115200 (estándar)
- */
-
 #ifndef UART_HANDLER_H
 #define UART_HANDLER_H
 
 #include <stdint.h>
 
-#define UART_BAUD_RATE      115200
+// ============================================================
+// MANEJADOR UART (Comunicación Serial)
+// Se utiliza para enviar mensajes de depuración a la consola
+// ============================================================
 
+#define UART_BAUD_RATE      115200  // Velocidad de transmisión estándar
+
+// ============================================================
+// PROTOTIPOS
+// ============================================================
+
+// Inicializa la UART para depuración
 void uart_init(void);
-void uart_send_msg(const char *formato, ...);
-int  uart_read_line(char *buffer, int max_len, int timeout_ms);
 
-#endif
+// Envía un mensaje formateado por UART (similar a printf)
+void uart_send_msg(const char *formato, ...);
+
+// Lee una línea de texto desde UART (bloqueante, con timeout)
+int uart_read_line(char *buffer, int max_len, int timeout_ms);
+
+#endif // UART_HANDLER_H
